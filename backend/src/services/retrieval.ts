@@ -1,6 +1,7 @@
 import type { ChunkSource } from '@practica/shared';
 import { config } from '../config.js';
 import { pool, toVectorLiteral } from '../db/pool.js';
+import { normalizeRelPath } from './paths.js';
 import { embed } from './ollama.js';
 
 export interface RetrievedChunk {
@@ -79,10 +80,12 @@ export async function hybridSearch(query: string): Promise<RetrievedChunk[]> {
 
   const fused = rrfFuse([semanticRows.rows, lexicalRows.rows], (r) => r.chunk_id);
 
+  // Normalizăm la citire: citările și antetele fragmentelor arată la fel indiferent
+  // de platforma pe care a fost indexat documentul.
   return fused.slice(0, config.TOP_N_CONTEXT).map(({ item, score }) => ({
     chunkId: item.chunk_id,
     documentId: item.document_id,
-    relPath: item.rel_path,
+    relPath: normalizeRelPath(item.rel_path),
     title: item.title,
     pageStart: item.page_start,
     pageEnd: item.page_end,

@@ -1,5 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { formatTimestamp, pickEvenly } from './video.js';
+import { formatTimestamp, pickEvenly, stripWordCount } from './video.js';
+
+describe('stripWordCount', () => {
+  it('scoate numărătoarea de cuvinte de la finalul descrierii', () => {
+    expect(stripWordCount('Ecranul afișează modulul "Buget". (148 cuvinte)')).toBe(
+      'Ecranul afișează modulul "Buget".'
+    );
+  });
+
+  it('acceptă variantele cu aproximare', () => {
+    expect(stripWordCount('Text. (aproximativ 150 cuvinte)')).toBe('Text.');
+    expect(stripWordCount('Text. (~150 cuvinte)')).toBe('Text.');
+  });
+
+  it('nu atinge o descriere care nu se termină așa', () => {
+    const text = 'Butonul "Salvare" apare lângă câmpul cu 148 de caractere.';
+    expect(stripWordCount(text)).toBe(text);
+  });
+
+  it('nu taie paranteze din mijlocul textului', () => {
+    const text = 'Ecranul (v7.3.1-beta) afișează 12 cuvinte cheie în antet.';
+    expect(stripWordCount(text)).toBe(text);
+  });
+});
 
 describe('formatTimestamp', () => {
   it('formatează secundele ca m:ss', () => {

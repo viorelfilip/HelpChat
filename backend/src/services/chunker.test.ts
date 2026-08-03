@@ -1,7 +1,67 @@
 import { describe, expect, it } from 'vitest';
-import { chunkPages, type PageText } from './chunker.js';
+import { chunkPages, chunkPagesAtomic, pickSource, type PageText } from './chunker.js';
 
-const page = (n: number, text: string, source: 'text' | 'ocr' = 'text'): PageText => ({ page: n, text, source });
+const page = (n: number, text: string, source: 'text' | 'ocr' | 'video' = 'text'): PageText => ({
+  page: n,
+  text,
+  source,
+});
+
+describe('pickSource', () => {
+  it('video are prioritate față de restul', () => {
+    expect(pickSource(['text', 'video'])).toBe('video');
+    expect(pickSource(['ocr', 'video'])).toBe('video');
+  });
+
+  it('ocr bate text', () => {
+    expect(pickSource(['text', 'ocr'])).toBe('ocr');
+  });
+
+  it('implicit text', () => {
+    expect(pickSource([])).toBe('text');
+    expect(pickSource(['text'])).toBe('text');
+  });
+});
+
+describe('chunkPagesAtomic', () => {
+  it('fiecare cadru devine exact un fragment', () => {
+    const cadre = [
+      page(0, '[Cadru la min. 0:00]\nEcranul afișează modulul Buget.', 'video'),
+      page(8, '[Cadru la min. 0:08]\nSe salvează documentul.', 'video'),
+      page(29, '[Cadru la min. 0:29]\nStarea devine Anulat A.', 'video'),
+    ];
+    const chunks = chunkPagesAtomic(cadre);
+    expect(chunks).toHaveLength(3);
+    expect(chunks.map((c) => c.index)).toEqual([0, 1, 2]);
+  });
+
+  it('citarea indică un moment precis, nu un interval', () => {
+    const chunks = chunkPagesAtomic([page(29, 'Descrierea cadrului.', 'video')]);
+    expect(chunks[0]).toMatchObject({ pageStart: 29, pageEnd: 29, source: 'video' });
+  });
+
+  it('nu amestecă textul a două cadre în același fragment', () => {
+    const chunks = chunkPagesAtomic([
+      page(0, 'Primul cadru.', 'video'),
+      page(8, 'Al doilea cadru.', 'video'),
+    ]);
+    expect(chunks[0].text).toBe('Primul cadru.');
+    expect(chunks[1].text).toBe('Al doilea cadru.');
+  });
+
+  it('nu taie descrierile lungi', () => {
+    const lung = 'Descriere de cadru. '.repeat(120); // ~2400 caractere
+    const chunks = chunkPagesAtomic([page(5, lung, 'video')]);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].text).toBe(lung.trim());
+  });
+
+  it('ignoră cadrele fără descriere', () => {
+    const chunks = chunkPagesAtomic([page(0, '   ', 'video'), page(8, 'Are text.', 'video')]);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ index: 0, pageStart: 8 });
+  });
+});
 
 describe('chunkPages', () => {
   it('returnează listă goală pentru pagini fără text', () => {

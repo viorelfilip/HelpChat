@@ -18,6 +18,12 @@ export function formatTimestamp(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/** Modelul vision își raportează adesea bugetul la final — „(148 cuvinte)". E zgomot
+ *  care ajunge altfel în embedding, așa că îl scoatem înainte de indexare. */
+export function stripWordCount(text: string): string {
+  return text.replace(/\s*\(\s*(?:aproximativ\s+|cca\.?\s+|~\s*)?\d+\s*cuvinte\s*\)\s*$/i, '').trimEnd();
+}
+
 /** Alege cel mult `max` elemente distribuite uniform, păstrând primul și ultimul. */
 export function pickEvenly<T>(items: T[], max: number): T[] {
   if (items.length <= max) return items;
@@ -70,7 +76,7 @@ export async function extractVideoPages(
     for (const frame of frames) {
       const image = await readFile(join(workDir, frame.file));
       try {
-        const description = (await describeFrame(image.toString('base64'))).trim();
+        const description = stripWordCount((await describeFrame(image.toString('base64'))).trim());
         if (!description) {
           await logEvent('warn', 'video', `Cadrul de la ${formatTimestamp(frame.ts)}: modelul a returnat descriere goală`, relPath);
         }

@@ -21,6 +21,40 @@ interface Span {
   source: ChunkSource;
 }
 
+/** Un fragment care atinge mai multe pagini moștenește sursa cea mai specifică.
+ *  Fără asta, un fragment provenit din cadre video ajungea marcat drept 'text'. */
+export function pickSource(sources: ChunkSource[]): ChunkSource {
+  if (sources.includes('video')) return 'video';
+  if (sources.includes('ocr')) return 'ocr';
+  return 'text';
+}
+
+/**
+ * Fiecare pagină devine un fragment de sine stătător, fără fuziune și fără
+ * suprapunere.
+ *
+ * Pentru cadrele video, descrierea unui cadru este deja o unitate completă și
+ * încheiată (~150 de cuvinte). Trecută prin `chunkPages`, ea se taie la limita de
+ * ~1000 de caractere și fiecare fragment ajunge să conțină coada unui cadru lipită
+ * de începutul altuia — două ecrane diferite într-un singur vector, ambele
+ * trunchiate, cu un interval de secunde în loc de un moment precis.
+ */
+export function chunkPagesAtomic(pages: PageText[]): TextChunk[] {
+  const chunks: TextChunk[] = [];
+  for (const page of pages) {
+    const text = page.text.trim();
+    if (!text) continue;
+    chunks.push({
+      index: chunks.length,
+      text,
+      pageStart: page.page,
+      pageEnd: page.page,
+      source: page.source,
+    });
+  }
+  return chunks;
+}
+
 /**
  * Împarte textul unui document în fragmente de ~chunkSize caractere cu
  * suprapunere de overlap, tăind de preferință la limite de paragraf/propoziție
@@ -55,7 +89,7 @@ export function chunkPages(pages: PageText[], chunkSize: number, overlap: number
         text,
         pageStart: touching.length ? Math.min(...touching.map((s) => s.page)) : pages[0]?.page ?? 1,
         pageEnd: touching.length ? Math.max(...touching.map((s) => s.page)) : pages[0]?.page ?? 1,
-        source: touching.some((s) => s.source === 'ocr') ? 'ocr' : 'text',
+        source: pickSource(touching.map((s) => s.source)),
       });
     }
     if (end >= full.length) break;

@@ -1,7 +1,7 @@
 import chokidar from 'chokidar';
-import { relative } from 'node:path';
 import { config } from '../config.js';
 import { indexFile, isSupportedFile, markDeleted, scanAll } from './indexer.js';
+import { toRelPath } from './paths.js';
 import { logEvent } from './events.js';
 import { basename } from 'node:path';
 
@@ -16,7 +16,7 @@ export function startWatcher(): void {
   });
 
   const supported = (path: string) => isSupportedFile(basename(path));
-  const rel = (path: string) => relative(config.pdfDir, path);
+  const rel = (path: string) => toRelPath(config.pdfDir, path);
 
   watcher
     .on('add', (path) => {

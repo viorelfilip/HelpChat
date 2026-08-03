@@ -1,6 +1,7 @@
 import type { ChatStreamEvent, Citation } from '@practica/shared';
 import { pool } from '../db/pool.js';
 import { chatStream, type OllamaChatMessage } from './ollama.js';
+import { folderOf } from './paths.js';
 import { hybridSearch, type RetrievedChunk } from './retrieval.js';
 
 const HISTORY_MESSAGES = 6;
@@ -38,7 +39,7 @@ export function formatSourceRef(relPath: string, pageStart: number, pageEnd: num
 export function buildContextBlock(chunks: RetrievedChunk[]): string {
   return chunks
     .map((c, i) => {
-      const folder = c.relPath.includes('/') ? c.relPath.slice(0, c.relPath.lastIndexOf('/')) : '';
+      const folder = folderOf(c.relPath);
       const header = [
         `document: "${c.title}"`,
         folder ? `folder: ${folder}` : '',

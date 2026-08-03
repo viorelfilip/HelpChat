@@ -1,17 +1,26 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { join, relative, basename, extname } from 'node:path';
+import { join, basename, extname } from 'node:path';
 import { config } from '../config.js';
 import { pool, withTransaction, toVectorLiteral } from '../db/pool.js';
+import { normalizeRelPath, toAbsPath, toRelPath } from './paths.js';
 import { logEvent } from './events.js';
 import { embed } from './ollama.js';
 import { ocrImage } from './ollama.js';
 import { openPdf, MIN_TEXT_CHARS_PER_PAGE } from './pdf.js';
 import { extractDocxContent, type ExtractedImage } from './docx.js';
 import { extractVideoPages } from './video.js';
-import { chunkPages, type PageText } from './chunker.js';
+import { chunkPages, chunkPagesAtomic, type PageText } from './chunker.js';
 
 const EMBED_BATCH_SIZE = 32;
+
+/** Reconcilierea refuză să șteargă mai mult de atât din index într-o singură scanare.
+ *  Un val de „fișiere dispărute" care atinge tot indexul nu înseamnă că userul a golit
+ *  folderul, ci că `PDF_DIR` e greșit, folderul nu e montat, sau altă instanță scrie
+ *  în aceeași bază de date. În toate cazurile, a păstra indexul e alegerea sigură. */
+const MAX_DELETE_RATIO = 0.5;
+/** Sub acest număr, ștergerile sunt normale (ai șters efectiv câteva fișiere). */
+const DELETE_GUARD_MIN = 10;
 
 /** Extensiile indexabile; orice alt fișier din folder este ignorat tăcut. */
 export const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.mp4'];
@@ -21,6 +30,14 @@ export function isSupportedFile(name: string): boolean {
   // ~$foo.docx sunt fișiere temporare de lock create de Word.
   if (lower.startsWith('~$')) return false;
   return SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/** Decide dacă un val de „fișiere dispărute" e real sau semn de configurare greșită.
+ *  Un folder gol sau o dispariție care atinge jumătate din index nu se șterge tăcut. */
+export function isSuspiciousWipe(missing: number, tracked: number, foundOnDisk: number): boolean {
+  if (missing === 0) return false;
+  if (foundOnDisk === 0) return true;
+  return missing > DELETE_GUARD_MIN && missing > tracked * MAX_DELETE_RATIO;
 }
 
 let lastScanAt: string | null = null;
@@ -68,13 +85,20 @@ export function scanAll(force = false): Promise<{ indexed: number; skipped: numb
         `SELECT id, rel_path FROM documents WHERE status <> 'deleted'`
       );
       const onDisk = new Set(found);
+      const missing = rows.filter((r) => !onDisk.has(normalizeRelPath(r.rel_path)));
+
       let deleted = 0;
-      for (const row of rows) {
-        if (!onDisk.has(row.rel_path)) {
-          await pool.query(
-            `UPDATE documents SET status = 'deleted', updated_at = now() WHERE id = $1`,
-            [row.id]
-          );
+      if (isSuspiciousWipe(missing.length, rows.length, found.length)) {
+        await logEvent(
+          'error',
+          'scan',
+          `Reconciliere oprită: ${missing.length} din ${rows.length} documente par dispărute de pe disc, ` +
+            `dar scanarea a găsit ${found.length} fișiere în ${config.pdfDir}. ` +
+            `Verifică PDF_DIR sau dacă altă instanță folosește aceeași bază de date. Indexul rămâne neatins.`
+        );
+      } else {
+        for (const row of missing) {
+          await pool.query(`UPDATE documents SET status = 'deleted', updated_at = now() WHERE id = $1`, [row.id]);
           const gone = await pool.query<{ id: number }>(
             `DELETE FROM document_versions WHERE document_id = $1 RETURNING id`,
             [row.id]
@@ -109,7 +133,9 @@ export function indexFile(relPath: string, force = false): Promise<'indexed' | '
 /** Marchează un document dispărut (folosit de watcher la unlink). */
 export function markDeleted(relPath: string): Promise<void> {
   return enqueue(async () => {
-    const { rows } = await pool.query<{ id: number }>(`SELECT id FROM documents WHERE rel_path = $1`, [relPath]);
+    const { rows } = await pool.query<{ id: number }>(`SELECT id FROM documents WHERE rel_path = $1`, [
+      normalizeRelPath(relPath),
+    ]);
     if (!rows.length) return;
     await pool.query(`UPDATE documents SET status = 'deleted', updated_at = now() WHERE id = $1`, [rows[0].id]);
     const gone = await pool.query<{ id: number }>(
@@ -135,7 +161,7 @@ async function listSourceFiles(dir: string): Promise<string[]> {
       if (e.name.startsWith('.')) continue;
       const full = join(current, e.name);
       if (e.isDirectory()) await walk(full);
-      else if (e.isFile() && isSupportedFile(e.name)) out.push(relative(dir, full));
+      else if (e.isFile() && isSupportedFile(e.name)) out.push(toRelPath(dir, full));
     }
   }
   await walk(dir);
@@ -148,6 +174,8 @@ interface ExtractedContent {
   ocrPages: number;
   /** Imagini (capturi de ecran) referite în text prin marcaje [IMG:n]. */
   images: ExtractedImage[];
+  /** Paginile sunt unități de sine stătătoare (cadre video) și nu se fuzionează. */
+  atomicPages?: boolean;
 }
 
 /** Extrage marcajele [IMG:n] dintr-un fragment: textul curat + seq-urile imaginilor. */
@@ -168,8 +196,8 @@ export function parseMediaMarkers(text: string): { cleanText: string; seqs: numb
 /** Extrage conținutul în funcție de tipul fișierului. */
 async function extractContent(relPath: string, buffer: Buffer): Promise<ExtractedContent> {
   if (relPath.toLowerCase().endsWith('.mp4')) {
-    const { pages, images } = await extractVideoPages(join(config.pdfDir, relPath), relPath);
-    return { pages, pageCount: null, ocrPages: 0, images };
+    const { pages, images } = await extractVideoPages(toAbsPath(config.pdfDir, relPath), relPath);
+    return { pages, pageCount: null, ocrPages: 0, images, atomicPages: true };
   }
   if (relPath.toLowerCase().endsWith('.docx')) {
     const { text, images } = await extractDocxContent(buffer);
@@ -223,8 +251,9 @@ async function removeMediaDirs(versionIds: number[]): Promise<void> {
   }
 }
 
-async function indexOne(relPath: string, force = false): Promise<'indexed' | 'skipped' | 'failed'> {
-  const absPath = join(config.pdfDir, relPath);
+async function indexOne(rawRelPath: string, force = false): Promise<'indexed' | 'skipped' | 'failed'> {
+  const relPath = normalizeRelPath(rawRelPath);
+  const absPath = toAbsPath(config.pdfDir, relPath);
   let buffer: Buffer;
   try {
     buffer = await readFile(absPath);
@@ -275,9 +304,13 @@ async function indexOne(relPath: string, force = false): Promise<'indexed' | 'sk
   await logEvent('info', 'index', `Indexare pornită (hash ${hash.slice(0, 12)}…)`, relPath);
 
   try {
-    const { pages, pageCount, ocrPages, images } = await extractContent(relPath, buffer);
+    const { pages, pageCount, ocrPages, images, atomicPages } = await extractContent(relPath, buffer);
 
-    const rawChunks = chunkPages(pages, config.CHUNK_SIZE, config.CHUNK_OVERLAP);
+    // Cadrele video sunt descrieri complete în sine: fuzionarea lor ar amesteca
+    // două ecrane într-un fragment și ar transforma citarea într-un interval.
+    const rawChunks = atomicPages
+      ? chunkPagesAtomic(pages)
+      : chunkPages(pages, config.CHUNK_SIZE, config.CHUNK_OVERLAP);
     // Scoatem marcajele [IMG:n] din text și reținem ce imagini aparțin fiecărui fragment.
     const chunks = rawChunks
       .map((c) => {
