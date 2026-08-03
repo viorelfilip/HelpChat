@@ -24,6 +24,8 @@ interface DraftMessage {
   content: string;
   citations: Citation[];
   streaming?: boolean;
+  /** Tool-ul de facturi în curs de execuție (ex. „Consult facturile de plătit"). */
+  toolStatus?: string;
 }
 
 export function ChatPage() {
@@ -82,7 +84,9 @@ export function ChatPage() {
         if (event.type === 'conversation') {
           setActiveId(event.conversationId);
         } else if (event.type === 'token') {
-          updateLast((m) => ({ ...m, content: m.content + event.content }));
+          updateLast((m) => ({ ...m, content: m.content + event.content, toolStatus: undefined }));
+        } else if (event.type === 'tool') {
+          updateLast((m) => ({ ...m, toolStatus: event.summary }));
         } else if (event.type === 'done') {
           updateLast((m) => ({ ...m, citations: event.citations, streaming: false }));
         } else if (event.type === 'error') {
@@ -140,6 +144,11 @@ export function ChatPage() {
               <div className="bubble">
                 {m.role === 'assistant' ? (
                   <>
+                    {m.streaming && m.toolStatus && (
+                      <div className="tool-status">
+                        <em>⚙ {m.toolStatus}…</em>
+                      </div>
+                    )}
                     <ReactMarkdown>{m.content || (m.streaming ? '…' : '')}</ReactMarkdown>
                     {m.streaming && <span className="cursor">▍</span>}
                     {m.citations.length > 0 && (

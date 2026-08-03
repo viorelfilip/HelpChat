@@ -73,6 +73,7 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .bubble p:last-child { margin-bottom: 0; }
 .cursor { animation: blink 1s step-end infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0; } }
+.tool-status { margin-bottom: 8px; font-size: 13px; color: var(--muted); }
 
 .citations { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
 .citation-chip {

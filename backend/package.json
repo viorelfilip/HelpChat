@@ -8,6 +8,7 @@
     "start": "tsx src/server.ts",
     "migrate": "tsx src/db/migrate.ts",
     "index": "tsx src/cli/index-documents.ts",
+    "seed:facturi": "tsx src/cli/seed-facturi.ts",
     "build": "tsc --noEmit",
     "test": "vitest run"
   },

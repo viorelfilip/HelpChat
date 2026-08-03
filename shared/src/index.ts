@@ -68,5 +68,7 @@ export type ChatStreamEvent =
   | { type: 'conversation'; conversationId: number }
   | { type: 'sources'; citations: Citation[] }
   | { type: 'token'; content: string }
+  /** Modelul execută un tool de facturi (ex. "Consult facturile de plătit"). */
+  | { type: 'tool'; name: string; summary: string }
   | { type: 'done'; messageId: number; citations: Citation[] }
   | { type: 'error'; message: string };

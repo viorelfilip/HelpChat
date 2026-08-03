@@ -1,9 +1,36 @@
 import { config } from '../config.js';
 import { withRetry } from './retry.js';
 
+export interface OllamaToolCall {
+  function: {
+    name: string;
+    arguments: Record<string, unknown>;
+  };
+}
+
 export interface OllamaChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  /** Pe mesajele assistant: apelurile de tool cerute de model. */
+  tool_calls?: OllamaToolCall[];
+  /** Pe mesajele tool: numele tool-ului al cărui rezultat este content. */
+  tool_name?: string;
+}
+
+/** Definiție de tool în formatul nativ Ollama /api/chat. */
+export interface OllamaToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+/** Delta emisă de chatStream: text de răspuns și/sau apeluri de tool. */
+export interface OllamaChatDelta {
+  content?: string;
+  toolCalls?: OllamaToolCall[];
 }
 
 /** POST cu retry pe erori tranzitorii de rețea (rețeaua internă mai cade). */
@@ -47,11 +74,15 @@ export async function embed(input: string[]): Promise<number[][]> {
 }
 
 /**
- * Chat cu streaming pe API-ul nativ Ollama. Emite doar deltele din
- * `message.content` — câmpul `reasoning`/`thinking` al modelelor thinking
+ * Chat cu streaming pe API-ul nativ Ollama, opțional cu tool-uri (function
+ * calling). Emite deltele din `message.content` și apelurile de tool din
+ * `message.tool_calls` — câmpul `reasoning`/`thinking` al modelelor thinking
  * este ignorat intenționat (vezi MODELE-LOCALE-INDECO.md §5).
  */
-export async function* chatStream(messages: OllamaChatMessage[]): AsyncGenerator<string> {
+export async function* chatStream(
+  messages: OllamaChatMessage[],
+  tools?: OllamaToolDefinition[]
+): AsyncGenerator<OllamaChatDelta> {
   const res = await fetch(`${config.OLLAMA_URL_CHAT}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -61,6 +92,7 @@ export async function* chatStream(messages: OllamaChatMessage[]): AsyncGenerator
       stream: true,
       keep_alive: config.OLLAMA_KEEP_ALIVE,
       options: { temperature: config.CHAT_TEMPERATURE },
+      ...(tools?.length ? { tools } : {}),
     }),
     signal: AbortSignal.timeout(config.OLLAMA_TIMEOUT_MS),
   });
@@ -78,12 +110,13 @@ export async function* chatStream(messages: OllamaChatMessage[]): AsyncGenerator
       buffer = buffer.slice(nl + 1);
       if (!line) continue;
       const json = JSON.parse(line) as {
-        message?: { content?: string };
+        message?: { content?: string; tool_calls?: OllamaToolCall[] };
         error?: string;
         done?: boolean;
       };
       if (json.error) throw new Error(`Ollama chat → ${json.error}`);
-      if (json.message?.content) yield json.message.content;
+      if (json.message?.tool_calls?.length) yield { toolCalls: json.message.tool_calls };
+      if (json.message?.content) yield { content: json.message.content };
     }
   }
 }
