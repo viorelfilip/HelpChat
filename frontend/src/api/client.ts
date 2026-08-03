@@ -5,6 +5,7 @@ import type {
   DocumentSummary,
   IndexStatus,
   IngestionEvent,
+  StarterSuggestions,
 } from '@practica/shared';
 
 async function getJson<T>(url: string): Promise<T> {
@@ -22,6 +23,7 @@ export const api = {
   getEvents: (limit = 100) => getJson<IngestionEvent[]>(`/api/admin/events?limit=${limit}`),
   reindex: () => fetch('/api/admin/reindex', { method: 'POST' }),
   health: () => getJson<{ ok: boolean }>('/api/health'),
+  getSuggestions: () => getJson<StarterSuggestions>('/api/suggestions'),
 };
 
 /**

@@ -1,8 +1,10 @@
 import type { ChatStreamEvent, Citation } from '@practica/shared';
+import { config } from '../config.js';
 import { pool } from '../db/pool.js';
 import { executeFacturiTool, facturiToolDefs, facturiToolLabel } from './facturi/tools.js';
 import { chatStream, type OllamaChatMessage, type OllamaToolCall } from './ollama.js';
 import { hybridSearch, type RetrievedChunk } from './retrieval.js';
+import { buildTopicInventory, generateFollowUps } from './suggestions.js';
 
 const HISTORY_MESSAGES = 6;
 const SNIPPET_MAX_CHARS = 400;
@@ -24,7 +26,10 @@ Reguli obligatorii:
 Aplicația gestionează și facturile, plățile și partenerii firmei. Pentru acestea ai tool-uri dedicate, iar regulile 1–3 NU se aplică:
 7. La întrebări sau operații despre facturi, plăți, încasări, parteneri, solduri sau statistici financiare, folosește tool-urile disponibile și răspunde pe baza rezultatelor lor — fără etichete [Sn] și fără refuzul de la regula 3.
 8. Dacă un tool întoarce "needs_info" sau "error", NU inventa date: explică utilizatorului ce lipsește sau ce nu a mers și cere informațiile necesare.
-9. Prezintă sumele clar, cu monedă (implicit RON), și menționează scadențele sau statusurile relevante.`;
+9. Prezintă sumele clar, cu monedă (implicit RON), și menționează scadențele sau statusurile relevante.
+
+Întrebări neclare:
+10. Dacă întrebarea este prea vagă sau prea generală ca să poți răspunde util (ex. "ajutor", "ce știi?", "spune-mi despre aplicație"), NU ghici și nu răspunde generic: spune scurt ce poți acoperi și cere o precizare, propunând 2–3 subiecte concrete din lista de module primită în context sau din zona facturilor. Formulează propunerile ca întrebări pe care utilizatorul le poate alege direct.`;
 
 function mmss(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
@@ -139,7 +144,10 @@ export async function* answerQuestion(conversationId: number, question: string):
   ]);
   await pool.query(`UPDATE conversations SET updated_at = now() WHERE id = $1`, [conversationId]);
 
-  const chunks = await hybridSearch(buildSearchQuery(history, question));
+  const [chunks, topicInventory] = await Promise.all([
+    hybridSearch(buildSearchQuery(history, question)),
+    buildTopicInventory(),
+  ]);
   yield { type: 'sources', citations: toCitations(chunks) };
 
   const contextBlock = chunks.length
@@ -149,7 +157,12 @@ export async function* answerQuestion(conversationId: number, question: string):
   const messages: OllamaChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
     ...history,
-    { role: 'user', content: `${contextBlock}\n\nÎntrebare: ${question}` },
+    {
+      role: 'user',
+      // Inventarul de teme îi permite modelului să propună subiecte concrete
+      // când întrebarea e vagă sau când informația lipsește din fragmente.
+      content: [topicInventory, contextBlock, `Întrebare: ${question}`].filter(Boolean).join('\n\n'),
+    },
   ];
 
   // Bucla agentică: modelul poate cere tool-uri de facturi înainte de
@@ -195,6 +208,20 @@ export async function* answerQuestion(conversationId: number, question: string):
     `INSERT INTO messages (conversation_id, role, content, citations) VALUES ($1, 'assistant', $2, $3) RETURNING id`,
     [conversationId, answer, JSON.stringify(citations)]
   );
+  const messageId = rows[0].id;
 
-  yield { type: 'done', messageId: rows[0].id, citations };
+  yield { type: 'done', messageId, citations };
+
+  // Continuările se generează după `done`: răspunsul e deja complet pe ecran,
+  // iar chips-urile apar puțin mai târziu. Eșecul lor nu afectează răspunsul.
+  if (config.SUGGESTIONS_ENABLED) {
+    const suggestions = await generateFollowUps(question, answer, topicInventory);
+    if (suggestions.length) {
+      await pool.query(`UPDATE messages SET suggestions = $2 WHERE id = $1`, [
+        messageId,
+        JSON.stringify(suggestions),
+      ]);
+      yield { type: 'suggestions', messageId, items: suggestions };
+    }
+  }
 }

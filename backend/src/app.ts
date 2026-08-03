@@ -4,12 +4,13 @@ import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { ChatStreamEvent, DocumentSummary, IndexStatus } from '@practica/shared';
+import type { ChatStreamEvent, DocumentSummary, IndexStatus, StarterSuggestions } from '@practica/shared';
 import { config } from './config.js';
 import { pool } from './db/pool.js';
 import { healthCheck } from './services/health.js';
 import { answerQuestion } from './services/chat.js';
 import { indexerStatus, scanAll } from './services/indexer.js';
+import { getStarterSuggestions } from './services/suggestions.js';
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
@@ -113,6 +114,9 @@ export async function buildServer(): Promise<FastifyInstance> {
     }
   });
 
+  // Sugestii de pornire pentru o conversație nouă (teme indexate + facturi).
+  app.get('/api/suggestions', async (): Promise<StarterSuggestions> => getStarterSuggestions());
+
   // === Conversații ===
 
   app.get('/api/conversations', async () => {
@@ -124,7 +128,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   app.get<{ Params: { id: string } }>('/api/conversations/:id/messages', async (req, reply) => {
     const { rows } = await pool.query(
-      `SELECT id, conversation_id, role, content, citations, created_at
+      `SELECT id, conversation_id, role, content, citations, suggestions, created_at
        FROM messages WHERE conversation_id = $1 ORDER BY id`,
       [req.params.id]
     );
@@ -134,6 +138,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       role: r.role,
       content: r.content,
       citations: r.citations,
+      suggestions: r.suggestions,
       createdAt: r.created_at,
     }));
   });

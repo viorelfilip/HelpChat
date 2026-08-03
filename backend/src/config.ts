@@ -31,6 +31,12 @@ const schema = z.object({
   RESCAN_INTERVAL_MIN: z.coerce.number().int().min(1).default(30),
   OLLAMA_TIMEOUT_MS: z.coerce.number().int().default(300_000),
   OLLAMA_KEEP_ALIVE: z.string().default('30m'),
+  // Sugestiile de continuare cer un apel scurt suplimentar la model după
+  // fiecare răspuns; pot fi oprite dacă latența contează mai mult.
+  SUGGESTIONS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 });
 
 const parsed = schema.safeParse(process.env);

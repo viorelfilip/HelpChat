@@ -37,7 +37,17 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   citations: Citation[];
+  /** Întrebări propuse pentru continuarea discuției (doar pe mesajele asistentului). */
+  suggestions: string[];
   createdAt: string;
+}
+
+/** Sugestiile afișate la deschiderea unei conversații noi. */
+export interface StarterSuggestions {
+  /** Temele acoperite de documentele indexate. */
+  topics: string[];
+  /** Întrebări gata de trimis. */
+  questions: string[];
 }
 
 export interface Conversation {
@@ -71,4 +81,6 @@ export type ChatStreamEvent =
   /** Modelul execută un tool de facturi (ex. "Consult facturile de plătit"). */
   | { type: 'tool'; name: string; summary: string }
   | { type: 'done'; messageId: number; citations: Citation[] }
+  /** Continuări propuse, emise după `done`. */
+  | { type: 'suggestions'; messageId: number; items: string[] }
   | { type: 'error'; message: string };

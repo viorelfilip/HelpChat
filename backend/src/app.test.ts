@@ -16,7 +16,7 @@ vi.mock('./services/ollama.js', () => ({
 
 const { buildServer } = await import('./app.js');
 const { pool } = await import('./db/pool.js');
-const { chatStream } = await import('./services/ollama.js');
+const { chatStream, chat } = await import('./services/ollama.js');
 
 let app: FastifyInstance;
 
@@ -129,6 +129,45 @@ describe('API', () => {
     const messages = await app.inject({ method: 'GET', url: `/api/conversations/${conversationId}/messages` });
     // Mesajele intermediare (assistant cu tool_calls, tool) nu se persistă.
     expect(messages.json()).toHaveLength(2);
+    await app.inject({ method: 'DELETE', url: `/api/conversations/${conversationId}` });
+  });
+
+  it('GET /api/suggestions propune teme și întrebări de pornire', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/suggestions' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { topics: string[]; questions: string[] };
+    expect(Array.isArray(body.topics)).toBe(true);
+    expect(Array.isArray(body.questions)).toBe(true);
+    // Fiecare sugestie e o întrebare gata de trimis.
+    for (const q of body.questions) expect(q.endsWith('?')).toBe(true);
+  });
+
+  it('chat: sugestiile de continuare sunt emise după done și persistate', async () => {
+    vi.mocked(chat).mockResolvedValueOnce('Cum adaug un document nou?\nCe rapoarte sunt disponibile?');
+
+    const chatRes = await app.inject({
+      method: 'POST',
+      url: '/api/chat',
+      payload: { question: 'Întrebare de test pentru sugestii?' },
+    });
+    const events = chatRes.body
+      .split('\n\n')
+      .filter((b) => b.startsWith('data: '))
+      .map((b) => JSON.parse(b.slice(6)));
+
+    const done = events.find((e) => e.type === 'done');
+    const suggestions = events.find((e) => e.type === 'suggestions');
+    expect(suggestions).toBeDefined();
+    expect(suggestions.items).toEqual(['Cum adaug un document nou?', 'Ce rapoarte sunt disponibile?']);
+    // Ordinea contează: sugestiile vin după răspunsul finalizat.
+    expect(events.indexOf(suggestions)).toBeGreaterThan(events.indexOf(done));
+    expect(suggestions.messageId).toBe(done.messageId);
+
+    const conversationId = events.find((e) => e.type === 'conversation').conversationId as number;
+    const messages = await app.inject({ method: 'GET', url: `/api/conversations/${conversationId}/messages` });
+    const persisted = messages.json() as Array<{ role: string; suggestions: string[] }>;
+    expect(persisted[1].suggestions).toEqual(suggestions.items);
+
     await app.inject({ method: 'DELETE', url: `/api/conversations/${conversationId}` });
   });
 

@@ -10,6 +10,7 @@ import { openPdf, MIN_TEXT_CHARS_PER_PAGE } from './pdf.js';
 import { extractDocxContent, type ExtractedImage } from './docx.js';
 import { extractVideoPages } from './video.js';
 import { chunkPages, type PageText } from './chunker.js';
+import { resetModulesCache } from './suggestions.js';
 
 const EMBED_BATCH_SIZE = 32;
 
@@ -86,6 +87,8 @@ export function scanAll(force = false): Promise<{ indexed: number; skipped: numb
       }
 
       lastScanAt = new Date().toISOString();
+      // Documentele s-au putut schimba → temele sugerate se recalculează.
+      resetModulesCache();
       await logEvent('info', 'scan', `Scanare încheiată: ${indexed} indexate, ${skipped} neschimbate, ${failed} eșuate, ${deleted} șterse`);
       return { indexed, skipped, failed, deleted };
     } finally {

@@ -94,7 +94,8 @@ Aplicația (frontend + API) răspunde pe **http://localhost:3001**. Migrațiile 
 
 | Metodă & rută | Rol |
 |---|---|
-| `POST /api/chat` `{question, conversationId?}` | răspuns în flux SSE: `conversation`, `sources`, `token`…, `done` |
+| `POST /api/chat` `{question, conversationId?}` | răspuns în flux SSE: `conversation`, `sources`, `token`…, `tool`, `done`, `suggestions` |
+| `GET /api/suggestions` | teme indexate + întrebări propuse la deschiderea unui chat nou |
 | `GET /api/conversations` / `GET /api/conversations/:id/messages` / `DELETE /api/conversations/:id` | persistența conversațiilor |
 | `GET /api/documents` | documente indexate + statistici (pagini, fragmente, OCR, erori) |
 | `GET /api/admin/status` / `GET /api/admin/events` / `POST /api/admin/reindex` | monitorizare și reindexare |
@@ -119,13 +120,23 @@ Exemple de prompturi în chat:
 
 Convenții: perioadele relative sunt calendaristice (`ultima lună` = luna precedentă completă, `ultimele două săptămâni` = 14 zile), sumele sunt `NUMERIC(14,2)` cu TVA implicit 19%, statusul facturii se recalculează automat din plăți (`overdue` se derivă la zi din scadență). Implementarea: `backend/src/services/facturi/` (calc pur, perioade, operații DB, tool-uri + dispatcher), bucla agentică în `services/chat.ts`.
 
+## Sugestii de discuție
+
+Ca discuția să nu pornească de la zero, aplicația propune subiecte în trei momente:
+
+- **La conversație nouă** — `GET /api/suggestions` întoarce temele deduse din documentele indexate (folderele-modul) plus câteva întrebări de facturi, afișate ca butoane. Sugestiile de facturi apar doar dacă există date în schema `facturi`, deci nu se propun subiecte fără acoperire.
+- **La întrebări vagi** — modelul primește în context lista de module și, în loc să răspundă generic la „ajutor" sau „ce știi?", cere o precizare și propune 2–3 subiecte concrete.
+- **După fiecare răspuns** — un apel scurt separat generează până la 3 întrebări de continuare, emise prin evenimentul SSE `suggestions` după `done` (răspunsul e deja complet pe ecran) și salvate pe mesaj, ca să reapară la redeschiderea conversației.
+
+Se pot opri cu `SUGGESTIONS_ENABLED=false`. Temele sunt recalculate după fiecare scanare a documentelor (cache de 5 minute).
+
 ## Teste
 
 ```bash
 npm test
 ```
 
-93 de teste: unitare (fragmentare, fuziune RRF, construcția contextului, extragerea citărilor, calcul TVA/status, perioade relative, normalizare CUI) și de integrare pe rute și pe fluxul de tool-uri (Fastify `inject`, Ollama mock-uit; necesită DB accesibil).
+102 de teste: unitare (fragmentare, fuziune RRF, construcția contextului, extragerea citărilor, calcul TVA/status, perioade relative, normalizare CUI, parsarea sugestiilor) și de integrare pe rute, pe fluxul de tool-uri și pe sugestii (Fastify `inject`, Ollama mock-uit; necesită DB accesibil).
 
 ## Structură
 
