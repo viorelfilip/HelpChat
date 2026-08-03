@@ -2,12 +2,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 // Izolăm testele de rețea: embeddings/chat vin din mock, DB-ul e cel real.
+// chatStream emite delte { content?, toolCalls? } — contractul din ollama.ts.
 vi.mock('./services/ollama.js', () => ({
   embed: vi.fn(async (input: string[]) => input.map(() => Array(1024).fill(0.01))),
   chat: vi.fn(async () => 'Răspuns de test [S1].'),
   chatStream: vi.fn(async function* () {
-    yield 'Răspuns ';
-    yield 'de test [S1].';
+    yield { content: 'Răspuns ' };
+    yield { content: 'de test [S1].' };
   }),
   ocrImage: vi.fn(async () => ''),
   checkOllama: vi.fn(async () => ({ ok: true, problems: [] })),
@@ -15,6 +16,7 @@ vi.mock('./services/ollama.js', () => ({
 
 const { buildServer } = await import('./app.js');
 const { pool } = await import('./db/pool.js');
+const { chatStream, chat } = await import('./services/ollama.js');
 
 let app: FastifyInstance;
 
@@ -79,6 +81,94 @@ describe('API', () => {
     expect(del.statusCode).toBe(200);
     const after = await app.inject({ method: 'GET', url: `/api/conversations/${conversationId}/messages` });
     expect(after.json()).toHaveLength(0);
+  });
+
+  it('chat cu tool-uri de facturi: execută tool-ul și răspunde fără citări fallback', async () => {
+    // Runda 1: modelul cere un tool; runda 2: răspunsul final.
+    vi.mocked(chatStream)
+      .mockImplementationOnce(async function* () {
+        yield { toolCalls: [{ function: { name: 'get_balance', arguments: { period: 'current_month' } } }] };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { content: 'Balanța pe luna curentă este echilibrată.' };
+      });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/chat',
+      payload: { question: 'Care este balanța dintre venituri și cheltuieli?' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const events = res.body
+      .split('\n\n')
+      .filter((b) => b.startsWith('data: '))
+      .map((b) => JSON.parse(b.slice(6)));
+
+    const tool = events.find((e) => e.type === 'tool');
+    expect(tool).toBeDefined();
+    expect(tool.name).toBe('get_balance');
+    expect(tool.summary).toMatch(/balanța/i);
+
+    expect(events.filter((e) => e.type === 'token').map((e) => e.content).join('')).toBe(
+      'Balanța pe luna curentă este echilibrată.'
+    );
+
+    // Al doilea apel către model primește rezultatul tool-ului ca mesaj role "tool".
+    const secondCallMessages = vi.mocked(chatStream).mock.calls[vi.mocked(chatStream).mock.calls.length - 1][0];
+    const toolMessage = secondCallMessages.find((m) => m.role === 'tool');
+    expect(toolMessage).toBeDefined();
+    expect(toolMessage?.tool_name).toBe('get_balance');
+    expect(JSON.parse(toolMessage!.content)).toHaveProperty('invoiced_issued');
+
+    // Răspuns bazat pe tool-uri, fără etichete [Sn] → fără citări fallback.
+    const done = events.find((e) => e.type === 'done');
+    expect(done.citations).toEqual([]);
+
+    const conversationId = events.find((e) => e.type === 'conversation').conversationId as number;
+    const messages = await app.inject({ method: 'GET', url: `/api/conversations/${conversationId}/messages` });
+    // Mesajele intermediare (assistant cu tool_calls, tool) nu se persistă.
+    expect(messages.json()).toHaveLength(2);
+    await app.inject({ method: 'DELETE', url: `/api/conversations/${conversationId}` });
+  });
+
+  it('GET /api/suggestions propune teme și întrebări de pornire', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/suggestions' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { topics: string[]; questions: string[] };
+    expect(Array.isArray(body.topics)).toBe(true);
+    expect(Array.isArray(body.questions)).toBe(true);
+    // Fiecare sugestie e o întrebare gata de trimis.
+    for (const q of body.questions) expect(q.endsWith('?')).toBe(true);
+  });
+
+  it('chat: sugestiile de continuare sunt emise după done și persistate', async () => {
+    vi.mocked(chat).mockResolvedValueOnce('Cum adaug un document nou?\nCe rapoarte sunt disponibile?');
+
+    const chatRes = await app.inject({
+      method: 'POST',
+      url: '/api/chat',
+      payload: { question: 'Întrebare de test pentru sugestii?' },
+    });
+    const events = chatRes.body
+      .split('\n\n')
+      .filter((b) => b.startsWith('data: '))
+      .map((b) => JSON.parse(b.slice(6)));
+
+    const done = events.find((e) => e.type === 'done');
+    const suggestions = events.find((e) => e.type === 'suggestions');
+    expect(suggestions).toBeDefined();
+    expect(suggestions.items).toEqual(['Cum adaug un document nou?', 'Ce rapoarte sunt disponibile?']);
+    // Ordinea contează: sugestiile vin după răspunsul finalizat.
+    expect(events.indexOf(suggestions)).toBeGreaterThan(events.indexOf(done));
+    expect(suggestions.messageId).toBe(done.messageId);
+
+    const conversationId = events.find((e) => e.type === 'conversation').conversationId as number;
+    const messages = await app.inject({ method: 'GET', url: `/api/conversations/${conversationId}/messages` });
+    const persisted = messages.json() as Array<{ role: string; suggestions: string[] }>;
+    expect(persisted[1].suggestions).toEqual(suggestions.items);
+
+    await app.inject({ method: 'DELETE', url: `/api/conversations/${conversationId}` });
   });
 
   it('GET /api/admin/status raportează contoarele', async () => {

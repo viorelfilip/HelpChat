@@ -9,6 +9,13 @@ import { basename } from 'node:path';
 export function startWatcher(): void {
   scanAll().catch((err) => logEvent('error', 'scan', `Scanarea inițială a eșuat: ${err.message}`));
 
+  // Plasă de siguranță: rescanare periodică — reia automat documentele eșuate
+  // (ex. după o întrerupere de rețea). Ieftină când totul e indexat (hash skip).
+  setInterval(
+    () => void scanAll().catch((err) => logEvent('error', 'scan', `Rescanarea periodică a eșuat: ${err.message}`)),
+    config.RESCAN_INTERVAL_MIN * 60_000
+  );
+
   const watcher = chokidar.watch(config.pdfDir, {
     ignoreInitial: true,
     // Așteaptă ca fișierul să fie scris complet (copieri mari) înainte de indexare.

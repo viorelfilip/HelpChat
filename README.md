@@ -52,7 +52,7 @@ npm run migrate
 npm run index
 
 # 5. Pornește backend (3001) + frontend (5173)
-npm run dev
+npm start
 ```
 
 Deschide **http://localhost:5173**. Pune PDF-uri în `documents/` — sunt indexate automat, inclusiv în timp ce aplicația rulează.
@@ -94,11 +94,41 @@ Aplicația (frontend + API) răspunde pe **http://localhost:3001**. Migrațiile 
 
 | Metodă & rută | Rol |
 |---|---|
-| `POST /api/chat` `{question, conversationId?}` | răspuns în flux SSE: `conversation`, `sources`, `token`…, `done` |
+| `POST /api/chat` `{question, conversationId?}` | răspuns în flux SSE: `conversation`, `sources`, `token`…, `tool`, `done`, `suggestions` |
+| `GET /api/suggestions` | teme indexate + întrebări propuse la deschiderea unui chat nou |
 | `GET /api/conversations` / `GET /api/conversations/:id/messages` / `DELETE /api/conversations/:id` | persistența conversațiilor |
 | `GET /api/documents` | documente indexate + statistici (pagini, fragmente, OCR, erori) |
 | `GET /api/admin/status` / `GET /api/admin/events` / `POST /api/admin/reindex` | monitorizare și reindexare |
 | `GET /api/health` | DB + Ollama + potrivirea dimensiunii embeddings |
+
+## Gestiunea facturilor (tool-uri în chat)
+
+Chat-ul răspunde și la întrebări despre **facturi, plăți și parteneri**, prin function calling (Ollama tools) pe schema Postgres dedicată `facturi` (izolată de tabelele RAG). Modelul alege singur între fragmentele din documente și cele 12 tool-uri de facturi (`list_invoices_to_pay`, `get_balance`, `get_statistics`, `add_partner`, `register_payment`…).
+
+```bash
+npm run migrate            # creează și schema facturi (005_facturi.sql)
+npm run seed:facturi       # date demo; cu -- --force înlocuiește datele existente
+```
+
+Exemple de prompturi în chat:
+
+- „Ce facturi am de plătit?" / „Ce facturi am de încasat?"
+- „Care este cuantumul încasărilor pentru luna viitoare?"
+- „Care este balanța dintre venituri și cheltuieli pe ultima lună?"
+- „Adaugă un partener cu numele X și CUI-ul Y." (cere tipul client/furnizor dacă lipsește)
+- „Înregistrează o încasare de 500 lei pentru factura INV 2026-0102."
+
+Convenții: perioadele relative sunt calendaristice (`ultima lună` = luna precedentă completă, `ultimele două săptămâni` = 14 zile), sumele sunt `NUMERIC(14,2)` cu TVA implicit 19%, statusul facturii se recalculează automat din plăți (`overdue` se derivă la zi din scadență). Implementarea: `backend/src/services/facturi/` (calc pur, perioade, operații DB, tool-uri + dispatcher), bucla agentică în `services/chat.ts`.
+
+## Sugestii de discuție
+
+Ca discuția să nu pornească de la zero, aplicația propune subiecte în trei momente:
+
+- **La conversație nouă** — `GET /api/suggestions` întoarce temele deduse din documentele indexate (folderele-modul) plus câteva întrebări de facturi, afișate ca butoane. Sugestiile de facturi apar doar dacă există date în schema `facturi`, deci nu se propun subiecte fără acoperire.
+- **La întrebări vagi** — modelul primește în context lista de module și, în loc să răspundă generic la „ajutor" sau „ce știi?", cere o precizare și propune 2–3 subiecte concrete.
+- **După fiecare răspuns** — un apel scurt separat generează până la 3 întrebări de continuare, emise prin evenimentul SSE `suggestions` după `done` (răspunsul e deja complet pe ecran) și salvate pe mesaj, ca să reapară la redeschiderea conversației.
+
+Se pot opri cu `SUGGESTIONS_ENABLED=false`. Temele sunt recalculate după fiecare scanare a documentelor (cache de 5 minute).
 
 ## Teste
 
@@ -106,12 +136,13 @@ Aplicația (frontend + API) răspunde pe **http://localhost:3001**. Migrațiile 
 npm test
 ```
 
-23 de teste: unitare (fragmentare, fuziune RRF, construcția contextului, extragerea citărilor) și de integrare pe rute (Fastify `inject`, Ollama mock-uit; necesită DB accesibil).
+102 de teste: unitare (fragmentare, fuziune RRF, construcția contextului, extragerea citărilor, calcul TVA/status, perioade relative, normalizare CUI, parsarea sugestiilor) și de integrare pe rute, pe fluxul de tool-uri și pe sugestii (Fastify `inject`, Ollama mock-uit; necesită DB accesibil).
 
 ## Structură
 
 ```
 backend/src/services/   pipeline-ul RAG: pdf, chunker, ollama, indexer, watcher, retrieval, chat
+backend/src/services/facturi/  gestiunea facturilor: calc, perioade, operații DB, tool-uri chat
 backend/migrations/     schema SQL (rulate de npm run migrate)
 frontend/src/pages/     Chat (streaming + citări), Admin (documente, jurnal, reindexare)
 shared/src/             tipurile comune API

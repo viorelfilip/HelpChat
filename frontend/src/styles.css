@@ -73,6 +73,19 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .bubble p:last-child { margin-bottom: 0; }
 .cursor { animation: blink 1s step-end infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0; } }
+.tool-status { margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+
+.starters { margin-top: 22px; }
+.starters-label { display: block; margin-bottom: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.starters-topics { margin-top: 18px; font-size: 12px; line-height: 1.6; }
+.suggestions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.suggestions.follow-ups { margin-top: 12px; justify-content: flex-start; }
+.suggestion-chip {
+  font-size: 13px; padding: 7px 12px; border-radius: 999px; cursor: pointer; text-align: left;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text);
+}
+.suggestion-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.suggestion-chip:disabled { opacity: .5; cursor: default; }
 
 .citations { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
 .citation-chip {
