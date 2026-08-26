@@ -61,26 +61,33 @@ export async function extractVideoPages(
     const files = (await readdir(workDir)).filter((f) => f.endsWith('.jpg')).sort();
 
     let frames = files.map((file, i) => ({ file, ts: timestamps[i] ?? 0 }));
-    if (frames.length > config.VIDEO_MAX_FRAMES) {
-      await logEvent(
-        'info',
-        'video',
-        `${frames.length} cadre detectate — păstrez ${config.VIDEO_MAX_FRAMES} distribuite uniform`,
-        relPath
-      );
+    const detectate = frames.length;
+    if (detectate > config.VIDEO_MAX_FRAMES) {
       frames = pickEvenly(frames, config.VIDEO_MAX_FRAMES);
     }
+    await logEvent(
+      'info',
+      'video',
+      detectate > frames.length
+        ? `${detectate} cadre detectate — descriu ${frames.length}, distribuite uniform`
+        : `${detectate} cadre detectate — le descriu pe toate`,
+      relPath
+    );
 
     const pages: PageText[] = [];
     const images: ExtractedImage[] = [];
-    for (const frame of frames) {
+    // Descrierea unui cadru poate dura peste un minut, iar în bază nu se scrie
+    // nimic până la finalul documentului — jurnalul e singurul semn de progres.
+    for (const [i, frame] of frames.entries()) {
+      const pozitie = `Cadrul ${i + 1}/${frames.length} (min. ${formatTimestamp(frame.ts)})`;
       const image = await readFile(join(workDir, frame.file));
+      const pornit = Date.now();
+      const secunde = () => Math.round((Date.now() - pornit) / 1000);
       try {
         const description = stripWordCount((await describeFrame(image.toString('base64'))).trim());
         if (!description) {
-          await logEvent('warn', 'video', `Cadrul de la ${formatTimestamp(frame.ts)}: modelul a returnat descriere goală`, relPath);
-        }
-        if (description) {
+          await logEvent('warn', 'video', `${pozitie}: modelul a returnat descriere goală (${secunde()}s)`, relPath);
+        } else {
           const seq = images.length;
           images.push({ seq, buffer: image, mime: 'image/jpeg' });
           pages.push({
@@ -88,12 +95,13 @@ export async function extractVideoPages(
             text: `[Cadru la min. ${formatTimestamp(frame.ts)}]\n${description}\n[IMG:${seq}]`,
             source: 'video',
           });
+          await logEvent('info', 'video', `${pozitie}: descris în ${secunde()}s, ${description.length} caractere`, relPath);
         }
       } catch (err) {
         await logEvent(
           'warn',
           'video',
-          `Cadrul de la ${formatTimestamp(frame.ts)}: descriere eșuată (${(err as Error).message})`,
+          `${pozitie}: descriere eșuată după ${secunde()}s (${(err as Error).message})`,
           relPath
         );
       }
